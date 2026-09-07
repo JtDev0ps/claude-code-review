@@ -8,7 +8,10 @@ and CI uses an OAuth token stored as a repository secret.
 
 Every review, wherever it runs, reads the same prompt from
 [`.claude/review-prompt.md`](.claude/review-prompt.md). Edit that one file to
-change how reviews behave. The reviewer ends its output with exactly one of
+change how reviews behave. The hook falls back to the prompt bundled with the
+`review-jt` skill when a repo has no committed copy, and `REVIEW_PROMPT=path`
+overrides both for a single run. The GitHub Action always needs the committed
+copy, since CI cannot see your local skill directory. The reviewer ends its output with exactly one of
 `MERGE`, `MERGE AFTER FIXES`, or `DO NOT MERGE`.
 
 There are three ways a review happens.
