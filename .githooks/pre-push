@@ -7,9 +7,23 @@ set -euo pipefail
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT"
 
-PROMPT_FILE=".claude/review-prompt.md"
-if [[ ! -f "$PROMPT_FILE" ]]; then
-  echo "pre-push: $PROMPT_FILE not found; skipping review." >&2
+# Resolve the review prompt, first match wins:
+#   1. $REVIEW_PROMPT      explicit override
+#   2. repo-local copy     committed, travels with the repo
+#   3. bundled template    from the review-jt skill, if installed on this machine
+# If none exist (e.g. a contributor without the skill), skip rather than fail.
+PROMPT_FILE=""
+for candidate in \
+  "${REVIEW_PROMPT:-}" \
+  ".claude/review-prompt.md" \
+  "$HOME/.claude/skills/review-jt/templates/review-prompt.md"
+do
+  if [[ -n "$candidate" && -f "$candidate" ]]; then PROMPT_FILE="$candidate"; break; fi
+done
+
+if [[ -z "$PROMPT_FILE" ]]; then
+  echo "pre-push: no review prompt found; skipping review." >&2
+  echo "  Looked for .claude/review-prompt.md and the review-jt bundled template." >&2
   exit 0
 fi
 
@@ -33,7 +47,7 @@ elif [[ -f pytest.ini || -f tox.ini ]] || { [[ -f pyproject.toml ]] && grep -qi 
 elif [[ -f Makefile ]] && grep -qE '^test:' Makefile; then tools="$tools,Bash(make test:*)"
 fi
 
-echo "▶ Claude review running (tools: $tools)..."
+echo "▶ Claude review running (prompt: $PROMPT_FILE | tools: $tools)..."
 
 set +e
 review=$(claude -p \
