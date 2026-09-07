@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Claude pre-push review. Bypass with: SKIP_REVIEW=1 git push
+[[ "${SKIP_REVIEW:-}" == "1" ]] && exit 0
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+
+PROMPT_FILE=".claude/review-prompt.md"
+if [[ ! -f "$PROMPT_FILE" ]]; then
+  echo "pre-push: $PROMPT_FILE not found; skipping review." >&2
+  exit 0
+fi
+
+if ! command -v claude >/dev/null 2>&1; then
+  echo "pre-push: 'claude' not on PATH; skipping review." >&2
+  exit 0
+fi
+
+base=$(git merge-base HEAD origin/main 2>/dev/null || echo "")
+[[ -z "$base" ]] && exit 0   # no origin/main to compare against yet
+
+diff=$(git diff "$base"...HEAD)
+[[ -z "$diff" ]] && exit 0   # nothing to review
+
+# Base tools, plus the repo's test command when one is detectable.
+tools="Read,Grep,Glob"
+if   [[ -f package.json ]] && grep -q '"test"[[:space:]]*:' package.json; then tools="$tools,Bash(npm test:*)"
+elif [[ -f Cargo.toml ]];   then tools="$tools,Bash(cargo test:*)"
+elif [[ -f go.mod ]];       then tools="$tools,Bash(go test:*)"
+elif [[ -f pytest.ini || -f tox.ini ]] || { [[ -f pyproject.toml ]] && grep -qi 'pytest' pyproject.toml; }; then tools="$tools,Bash(pytest:*)"
+elif [[ -f Makefile ]] && grep -qE '^test:' Makefile; then tools="$tools,Bash(make test:*)"
+fi
+
+echo "▶ Claude review running (tools: $tools)..."
+
+set +e
+review=$(claude -p \
+  --model claude-sonnet-5 \
+  --max-turns 10 \
+  --allowedTools "$tools" \
+  "$(cat "$PROMPT_FILE")
+
+DIFF:
+$diff")
+status=$?
+set -e
+
+if [[ $status -ne 0 || -z "$review" ]]; then
+  echo "✖ Review could not run (claude exited $status). Push blocked." >&2
+  echo "  Re-run, or bypass with: SKIP_REVIEW=1 git push" >&2
+  exit 1
+fi
+
+mkdir -p .reviews
+out=".reviews/$(date +%Y%m%d-%H%M%S).md"
+printf '%s\n' "$review" > "$out"
+printf '%s\n' "$review"
+echo "— saved to $out"
+
+if grep -q "DO NOT MERGE" <<< "$review"; then
+  echo "✖ Push blocked: reviewer returned DO NOT MERGE." >&2
+  echo "  Fix the blockers above, or bypass with: SKIP_REVIEW=1 git push" >&2
+  exit 1
+fi
+
+echo "✔ Review passed"
